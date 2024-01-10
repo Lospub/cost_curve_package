@@ -2,16 +2,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sympy import symbols, solve
 from sklearn import metrics
-from scipy.spatial import ConvexHull
 
-models_color = {}
+color_model = {"NB[0.3]":"#1f77b4", "NB[0.8]":"darkorange", "NB[0.5]":"green"}
 
 def build_plot(x_lim, y_lim, x_label, y_label, title):
     """
-    format the subplot
+    format the plot
     
     Args:
-        ax (int): identify the subplot need to be formatted
         x_lim (list): domain for x-axis
         y_lim (list): domain for y-axis
         x_label (string): the label name for x-axis
@@ -25,6 +23,7 @@ def build_plot(x_lim, y_lim, x_label, y_label, title):
     plt.legend()
     plt.title(title, fontsize=20)
     plt.show()
+
 
 def read_label(inputs, select_n, ppv):
     '''
@@ -114,7 +113,6 @@ def read_data(inputs, select_n):
         else:
             num = len(value)
             models.append((key, num))
-        
         pairs.append(value)
         
     init_pair = [None]*len(models)
@@ -154,29 +152,22 @@ def inital_pair_label(model, plot_pair):
     return model+"["+str(plot_pair[2])+"]"
 
 def curves(inputs, misclass=True, true_label = False, select_n = 10, pos_prob = 0.5, misclass_ratio=1, 
-               pos_misclass = 1, neg_misclass = 1, low_envelope=True, trivial=True, operating=False, classifiers=True, dominated=False,
-               roc_line=False,  convex=True, roc_trivial=True, model_costs = {}):
+               pos_misclass = 1, neg_misclass = 1, low_envelope=True, trivial=True, operating=True, classifiers=True, dominated=False,
+               roc_line=True,  convex=False, model_costs = {}):
     
     # identify number of plots based on input type
     fig1 = plt.figure(figsize=(12,5))
     ax = plt.subplot(1, 1, 1)
     
+    
     cost = cost_curve(inputs, true_label, select_n, model_costs)
     
     # build cost curve
     if misclass:
-        value, y_, sols = cost.cost_curve_with_misclass(ax, pos_prob, misclass_ratio, pos_misclass, neg_misclass, low_envelope, trivial, operating, classifiers, dominated)
+        value, y_ = cost.cost_curve_with_misclass(ax, pos_prob, misclass_ratio, pos_misclass, neg_misclass, low_envelope, trivial, operating, classifiers, dominated)
     else:
-        value, y_, sols = cost.cost_curve_without_misclass(ax, pos_prob, low_envelope, trivial, operating, classifiers, dominated)
-    
-    # build roc curve
-    fig2 = plt.figure(figsize=(12,5))
-    ax_ = plt.subplot(1, 1, 1)
-    models = cost.models.copy()
-    pairs = cost.pairs.copy()
-    init_pair = cost.init_pair.copy()
-    roc = roc_curve()
-    roc.draw_roc_curve(ax_, models, pairs, init_pair, roc_line, convex, roc_trivial)
+        cost.cost_curve_without_misclass(ax, low_envelope, trivial, operating, classifiers, dominated)
+
     
     # set the spacing between subplots
     plt.subplots_adjust(left=0.1,
@@ -185,7 +176,7 @@ def curves(inputs, misclass=True, true_label = False, select_n = 10, pos_prob = 
                         top=0.9, 
                         wspace=0.4, 
                         hspace=0.4)
-    return fig1, fig2, value, y_, sols
+    return fig1, value, y_
     
 class cost_curve:
     def __init__(self, inputs, true_label = False, select_n = 10, model_costs = {}):
@@ -214,7 +205,6 @@ class cost_curve:
         # self.init_pair: the list used to store the optimal classifier for each model
         
         self.ppv = None
-        self.sols = {}
         self.optimal_pair = [None]*len(inputs.keys())
         self.model_costs = model_costs
         if true_label:
@@ -222,7 +212,7 @@ class cost_curve:
         else:
             self.models, self.pairs, self.init_pair = read_data(inputs, select_n)
     
-    def cost_curve(self, ax, color, model, pair, index, low_envelope, operating, classifiers, dominated):
+    def cost_curve(self, ax, color, model, pair, index, low_envelope, operating, classifiers, dominated, neg_misclass, pos_misclass):
         '''
         build the cost curve plot
         
@@ -247,24 +237,28 @@ class cost_curve:
         '''
         pairs = pair.copy()
         calculate_pair = pair.copy()
-        # calculate_pair.append((0,0,0))
-        # calculate_pair.append((1,1,1))
-        # print(pair)
+        
+        # print(pairs)
         fprs, tprs, thresholds = map(list, zip(*pairs))
-        fprs_, tprs_, thresholds_ = map(list, zip(*calculate_pair))
-        pc, nec, lines, slpoes, intercepts, records, lower_envelope_list, lower_envelope_pair_list, lower_round = ([] for i in range(9))
+        fprs_, tprs_, thresholds = map(list, zip(*calculate_pair))
+        pc, nec, lines, slpoes, intercepts, lower_envelope_list, lower_envelope_pair_list = ([] for i in range(7))
         
         if self.misclass:
-            self.y_value = min((1-tpr)*self.x_value + fpr*(1-self.x_value) for tpr, fpr in zip(tprs_, fprs_))
+            y_value = min(((1-tpr)*self.x_value*neg_misclass + fpr*(1-self.x_value)*pos_misclass) for tpr, fpr in zip(tprs_, fprs_)) + self.model_costs[model]
+            trivial_ = [(0,0), (1,1)]
+            trivial_value = min(((1-tpr)*self.x_value*neg_misclass + fpr*(1-self.x_value)*pos_misclass) for tpr, fpr in trivial_)
+            # if y_value > trivial_value:
+            #     self.y_value = trivial_value
+            # else:
+            self.y_value = y_value
 
         # compute a line in the cost space for each point in the roc space
-        for fpr, tpr, threshold in zip(fprs, tprs, thresholds):
-            slope = 1-tpr-fpr
-            intercept = fpr
-            lines.append((slope, intercept))
-            slpoes.append(slope)
-            intercepts.append(intercept)
-            records.append(((slope, intercept), fpr, tpr, threshold))
+        # for fpr, tpr in zip(fprs, tprs):
+        #     slope = 1-tpr-fpr
+        #     intercept = fpr
+        #     lines.append((slope, intercept))
+        #     slpoes.append(slope)
+        #     intercepts.append(intercept)
             
         # inital the x value
         for i in np.arange(0, 1.01, 0.01):
@@ -272,22 +266,23 @@ class cost_curve:
 
         # compute the lower envelope    
         for x_value in pc:
-            y_value = min([(slope * x_value + intercept) for slope, intercept in zip(slpoes, intercepts)])
-            lower_envelope_pair_list.append((round(x_value, 2), round(y_value, 12)))
-            lower_round.append((round(x_value, 2), round(y_value, 3)))
+            y_value = min([((1-tpr)*(x_value*neg_misclass) + fpr*(1-x_value)*pos_misclass)  for fpr, tpr in zip(fprs, tprs)]) + self.model_costs[model]
+            lower_envelope_pair_list.append((x_value, round(y_value, 12)))
             lower_envelope_list.append(round(y_value, 12))
         
-        for pair, fpr, tpr, slope, intercept in zip(pairs, fprs, tprs, slpoes, intercepts):
+        
+        for pair, fpr, tpr in zip(pairs, fprs, tprs):
             
             # compute the cost curves
             for i in pc:
-                cost = (1-tpr)*i + fpr*(1-i)
+                cost = ((1-tpr)*(i*neg_misclass) + fpr*(1-i)*pos_misclass) + self.model_costs[model]
                 nec.append(round(cost, 12))
+            # print(nec)
 
             # display cost curve either with or not with domainted lines
-            self.display_classifiers(ax, color, model, pair, index, dominated, pc, nec, lower_envelope_list, lower_envelope_pair_list, slope, intercept, classifiers)
+            self.display_classifiers(ax, color, model, pair, index, dominated, pc, nec, lower_envelope_list, lower_envelope_pair_list, fpr, tpr, classifiers, neg_misclass, pos_misclass)
 
-            # ax.plot(pc, nec, linestyle = '-.', label = inital_pair_label(model, decimal_pair(pair)))
+            # ax.plot(pc, nec, linestyle = '-', label = inital_pair_label(model, decimal_pair(pair)))
             #clear lists for next iteration
             nec.clear()
         
@@ -296,47 +291,8 @@ class cost_curve:
 
         # display the lower envelope as a thicker black line
         self.display_lower_envelope(ax, color, model, low_envelope, pc, lower_envelope_list)
-
-        # find intersections to build misclassified cost ratio range
-        intersections = self.intersection_finder(slpoes, intercepts, lower_envelope_pair_list)
-        sols = [(0,0,0)]
-        thr = []
-        for i in intersections:
-            # [1-p(+)] ✖ FPR(α)  ✖ ratio( α ) ✖ C(–|+)+P(+)  ✖ C(–|+)✖  FNR(α) = y_value * total
-            matched = [record for record in records if record[0] == i[1]]
-            _fpr = matched[0][1]
-            _tpr = matched[0][2]
-            _threshold = matched[0][3]
-            _index = fprs.index(_fpr)
-            if _threshold not in thr:
-                thr.append(_threshold)
-
-            _matched = [record for record in records if record[0] == i[2]]
-            _fpr_ = _matched[0][1]
-            _threshold_ = _matched[0][3]
-            _index_ = fprs.index(_fpr_)
-            if _threshold_ not in thr:
-                thr.append(_threshold_)
-
-            x = symbols('x')            
-            # curve = (0.8*0.3*x+0.2*0.3)/(0.8+0.2*x) - i[0][1]
-            curve = ((1-self.ppv)*_fpr*x+self.ppv*(1-_tpr))/(self.ppv+(1-self.ppv)*x) - i[0][1]
-            sol = solve(curve)
-            sols.append((round(sol[0], 2), pairs[_index][2], pairs[_index_][2]))
-        sols.sort()
-        self.sols[model] = []
-        marked_thr = []
-        for i in range(0,len(sols)-1):
-            marked_thr.append(sols[i+1][1])
-            item = {"THR":str(sols[i+1][1]), "ratio_from": format(sols[i][0], '.2f'), "ratio_to": format(sols[i+1][0], '.2f')}
-            self.sols[model].append(item)
-        left = set(thr) - set(marked_thr)
-        last_item = {"THR":str(list(left)[0]), "ratio_from": format(sols[len(sols)-1][0], '.2f'), "ratio_to": 'inf'}
-        self.sols[model].append(last_item)
-        
-
     
-    def display_classifiers(self, ax, color, model, pair, index, dominated, pc, nec, lower_envelope_list, lower_envelope_pair, slope, intercept, classifiers):
+    def display_classifiers(self, ax, color, model, pair, index, dominated, pc, nec, lower_envelope_list, lower_envelope_pair, fpr, tpr, classifiers, neg_misclass, pos_misclass):
         """
         This function is used to build the specific cost curve line in the plot.
 
@@ -361,37 +317,33 @@ class cost_curve:
         
         # plot with misclassification cots
         if self.misclass:
-            y = slope * self.x_value + intercept
+            y = ((1-tpr)*(self.x_value*neg_misclass) + fpr*(1-self.x_value)*pos_misclass) + self.model_costs[model]
             if classifiers:
                 # ideantify the optimal classifier
                 if round(self.y_value, 12) == round(y, 12):
-                    # if slope != 1 and slope != -1:
+                    
                     self.init_pair[index] = pair
                     self.optimal_pair[index] = [model, decimal_pair(pair), y]
+                    print(plot_pair)
                     label_pair = inital_pair_label(model, plot_pair)
                     
                     # plot the optimal classifier 
-                    ax.plot(pc, nec, color=color, label = label_pair)
+                    ax.plot(pc, nec, color = color_model[label_pair], label = label_pair)
                     
-                    # else:
-                    #     self.init_pair[index] = None
-                    #     self.optimal_pair[index] = None
+
                 else:
                     # display the curve other than the optimal classifier
                     if dominated:
-                    #     if slope != 1 and slope != -1:
-                        ax.plot(pc, nec, linestyle = '-.', label = inital_pair_label(model, plot_pair))
+                        ax.plot(pc, nec, color = color_model[inital_pair_label(model, plot_pair)], linestyle = '-.',  label = inital_pair_label(model, plot_pair))
             else:
                 if dominated:
-                    # if slope != 1 and slope != -1:
-                    ax.plot(pc, nec, linestyle = '-.', label = inital_pair_label(model, plot_pair))         
+                    ax.plot(pc, nec, color = color_model[inital_pair_label(model, plot_pair)], linestyle = '-.', label = inital_pair_label(model, plot_pair))         
         # plot without misclassification cost
         else:
             intersect = [value for value in nec if value in lower_envelope_list]
             intersects = list(dict.fromkeys(intersect))
-            # if slope != 1 and slope != -1:
                 
-                # display the classifier is outerperformed by another
+            # display the classifier is outerperformed by another
             if not dominated:
                 if len(intersect) != 0:
                     is_draw = False
@@ -454,61 +406,34 @@ class cost_curve:
             
             # find range boundary
             for slope, intercept in lines:
-                curve = slope * x_value + intercept
-                left_intersection_x = solve(curve - x_value, x_value)
+                curve = (slope * x_value + intercept) * self.total_cost + self.model_costs[model]
+                left_intersection_x = solve(curve - (x_value * self.total_cost), x_value)
                 if len(left_intersection_x) != 0:
                     intersections_left.append(left_intersection_x)
                 
-                right_intersection_x = solve(curve - (-x_value+1), x_value)
+                right_intersection_x = solve(curve - ((-x_value+1) * self.total_cost), x_value)
                 if right_intersection_x != 0:
                     intersections_right.append(right_intersection_x)
             
             # draw left bouundary 
+            # print(intersections_left)
             x_inter_left = min(x for x in intersections_left)
+            if x_inter_left[0] > 0.5 or x_inter_left[0] < 0:
+                x_inter_left = [0]
+            # print(x_inter_left)
             name = "Operating Range " + model
-            ax.plot([x_inter_left[0], x_inter_left[0]], [0, x_inter_left[0]], color=color, label = name, alpha=0.7, linewidth=3, linestyle="--")
+            ax.plot([x_inter_left[0], x_inter_left[0]], [0, x_inter_left[0]*self.total_cost], color=color, label = name, alpha=0.7, linewidth=3, linestyle="--")
             
             # draw right boundary
             x_inter_right = max(x for x in intersections_right)
-            y_inter_right = -x_inter_right[0]+1
-            count = 0
-            for line in ax.get_lines():
-                if line.get_label() == name:
-                    count -= 1
-                count += 1
-            ax.plot([x_inter_right[0], x_inter_right[0]], [0, y_inter_right], ax.get_lines()[count].get_c(), alpha=0.7, linewidth=3, linestyle="--")
+            if 0.5 > x_inter_right[0] or 1 < x_inter_right[0]:
+                x_inter_right = [1]
+            y_inter_right = (-x_inter_right[0]+1)*self.total_cost
+            ax.plot([x_inter_right[0], x_inter_right[0]], [0, y_inter_right], color=color, alpha=0.7, linewidth=3, linestyle="--")
         else:
             return None
         
-    def intersection_finder(self, slpoes, intercepts, lower_envelope_pair_list):
-        x_value = symbols('x')
-        length = len(slpoes)
-        intersections = []
-        intersect_r = []
-        for i in range(length):
-            curve_1 = slpoes[i] * x_value + intercepts[i]
-            # _intersection_1 = solve(curve_1 - x_value, x_value)
-            # _intersection_2 = solve(curve_1 - (-x_value+1), x_value)
-            # _intersection_1_x = round(_intersection_1[0], 2)
-            # _intersection_2_x = round(_intersection_2[0], 2)
-            # intersections.append((_intersection_1_x, round( slpoes[i] *_intersection_1_x + intercepts[i], 12)))           
-            # intersections.append((_intersection_2_x, round( slpoes[i] *_intersection_2_x + intercepts[i], 12)))
-            if i != length - 1:
-                for j in range(i+1, length):
-                    curve_2 = slpoes[j] * x_value + intercepts[j]
-                    intersection = solve(curve_1 - curve_2, x_value)
-                    intersection_x = round(float(intersection[0]), 2)
-                    inter_y = min(slpoes[i] *intersection_x + intercepts[i], slpoes[j] *intersection_x + intercepts[j])
-                    intersections.append([(intersection_x, round(inter_y, 12)), (slpoes[i], intercepts[i]), (slpoes[j], intercepts[j])])
-        intersections.sort()
-        for intersect in intersections:
-            if intersect[0] in lower_envelope_pair_list:
-                intersect_r.append(intersect)
-
-        intersect_r.sort()
-        return intersect_r
-
-    def trivial_classification(self, ax, trivial):
+    def trivial_classification(self, ax, trivial,pos_misclass, neg_misclass):
         '''
         Draw trivial classifiers
         
@@ -517,7 +442,24 @@ class cost_curve:
             trivial (boolean): true - draw trivial classifier, false - not draw trivial classifier
         '''
         if trivial:
-            ax.plot([0, 0.5, 1], [0, 0.5, 0], color="yellow", label="Trivial Classifier", linewidth=4)
+            # inital the x value
+            pc = []
+            for i in np.arange(0, 1.01, 0.01):
+                pc.append(i)
+
+            fprs = [0, 1]
+            tprs = [0, 1]
+            lower_envelope_list = []
+            # compute the lower envelope
+            # for fpr, tpr in zip(fprs, tprs):
+                # lower_envelope_list = []
+            for x_value in pc:
+                y_value = min([((1-tpr)*(x_value*neg_misclass) + fpr*(1-x_value)*pos_misclass)  for fpr, tpr in zip(fprs, tprs)]) 
+                    # y_value = (1-tpr)*(x_value*neg_misclass) + fpr*(1-x_value)*pos_misclass
+                lower_envelope_list.append(round(y_value, 12))
+            self.y_max = max(lower_envelope_list)
+            ax.plot(pc, lower_envelope_list, color="yellow", label="Trivial Classifier", alpha=0.5,linewidth=4)
+            # ax.plot(pc, lower_envelope_list[101:202], color="yellow", alpha=0.5,linewidth=4)
         else:
             return None
         
@@ -533,9 +475,9 @@ class cost_curve:
             lower_envelope_list (list): the list used to identified lower envelope
         '''
         if low_envelope:
-            ax.plot(pc, lower_envelope_list, color=color, label="Lower Envelope "+model, linewidth=4, alpha = .6)
+            ax.plot(pc, lower_envelope_list, color=color, label="Lower Envelope "+model, linewidth=4, alpha = .5)
             
-    def cost_curve_without_misclass(self, ax, pos_prob = 0.5, low_envelope = True, trivial = True, operating = True, classifiers = True, dominated = False):
+    def cost_curve_without_misclass(self, ax, low_envelope = True, trivial = True, operating = True, classifiers = True, dominated = False):
         """
         generate cost curve plot without misclassification cost
 
@@ -556,25 +498,14 @@ class cost_curve:
                         false - not display the classifier is outerperformed by another
         """
         self.misclass = False
-        x_value = pos_prob
-        self.x_value = x_value
-        self.misclass = True
-
-        self.trivial_classification(ax, trivial)
         for i in range(len(self.models)):
             model = self.models[i][0]
             pair = self.pairs[i].copy()
             color = next(ax._get_lines.prop_cycler)['color']
-            models_color[model] = color
             self.cost_curve(ax, color, model, pair, i, low_envelope, operating, classifiers, dominated)
-            y_value = self.y_value
-            ax.plot(x_value, y_value, 'o', color=color, markersize = 10)
+        self.trivial_classification(ax, trivial)
+        build_plot([0.0, 1.0], [0.0, 0.5], "Probability Cost Function", "Expected Cost", "Real Cost Curve")
         
-        value, y_ = self.optimal_classifier()
-        build_plot([0.0, 1.0], [0.0, 0.5], "Probability Cost Function", "Normalized Expected Cost", "Normalized Cost Curve")
-
-        return value, y_, self.sols
-
     def normalization(self, pos_misclass, neg_misclass, positive_probability):
         """
         calsulate the normalized expected cost with misclassification: p(+) * C(-|+) / (p(+) * C(-|+) + (1 - p(+)) * C(+|-))
@@ -609,7 +540,7 @@ class cost_curve:
             value = 'Trivial Classifier'
             y_ = None
         return value, y_
-        
+    
     def cost_curve_with_misclass(self, ax, pos_prob = 0.5, misclass_ratio=1, pos_misclass = 1, neg_misclass = 1, low_envelope=True, trivial=True, operating=True, classifier=True, dominated=False):
         """
         generate cost curve plot with misclassification cost
@@ -636,121 +567,56 @@ class cost_curve:
                     Defaults to False.
         """
         # identify the positive to negative misclassification and negative to positive misclassification 
-        self.ppv = pos_prob
         if misclass_ratio != 1:
             neg_misclass = misclass_ratio
             pos_misclass = 1
-        
+
         # calculate optimal cost with misclassification
-        x_value = self.normalization(pos_misclass, neg_misclass, pos_prob)
-        self.x_value = x_value
+        # x_value = self.normalization(pos_misclass, neg_misclass, pos_prob)
+        self.x_value = pos_prob
         self.misclass = True
+        self.total_cost = pos_prob * neg_misclass + (1 - pos_prob) * pos_misclass
+        
+
+        # total_cost = 0
+        self.trivial_classification(ax, trivial, pos_misclass, neg_misclass)
 
         # display the misclassification point
-        self.trivial_classification(ax, trivial)
         for i in range(len(self.models)):
             model = self.models[i][0]
             pair = self.pairs[i].copy()
             
-            
+            # if len(self.model_costs) > 0:
+            #     total_cost = pos_prob * neg_misclass + (1 - pos_prob) * pos_misclass + self.model_costs[model]
+            # else:
+            #     total_cost = pos_prob * neg_misclass + (1 - pos_prob) * pos_misclass
+            # if self.total_cost > total_cost:
+            #     total_cost = self.total_cost
             color = next(ax._get_lines.prop_cycler)['color']
-            models_color[model] = color
-            self.cost_curve(ax, color, model, pair, i, low_envelope, operating, classifier, dominated)
+            self.cost_curve(ax, color, model, pair, i, low_envelope, operating, classifier, dominated, neg_misclass, pos_misclass)
+        
             y_value = self.y_value
-            ax.plot(x_value, y_value, 'o', color=color, markersize = 10)
-        
-        value, y_ = self.optimal_classifier()
-        # build_plot([0.0, 1.0], [0.0, 0.5], "Probability Cost Function", "Normalized Expected Cost", "Normalized Cost Curve")
-
-        build_plot([0.0, 1.0], [0.0, 0.5], "PC(+)", "Normalized Expected Cost", "Normalized Cost Curve")
-        return value, y_, self.sols
-        
-class roc_curve:
-    def draw_roc_curve(self, ax, models, pairs, init_pair, roc_line=True,  convex=False, roc_trivial=True):
-        """
-        generate the roc curve plot
-
-        Args:
-            ax (subplot)
-            ax_num (int)
-            models (list): list of model names, 
-            pairs (list): list of tuple (false positive rate, true positive rate, threshold), 
-            init_pair (list): list used to store the optimal classifier for each model
-            trivial (bool, optional): true - draw trivial classifier, false - not draw trivial classifier. Defaults to True.
-            roc_line (bool, optional): true - draw roc curve line, false not draw roc curve line. Defaults to True.
-            convex (bool, optional): true - draw convex hill, false - not draw convex hill. Defaults to False.
-        """
-        
-        for i in range(len(models)):
-            model = models[i][0]
-            pair = pairs[i].copy()
-            pair.append((0,0,0))
-            pair.append((1,1,1))
-            pair.sort()
-            pair_copy = pair.copy()
+            # # print(y_value)
+            ax.plot(pos_prob, y_value, 'o', color = color, markersize = 10, alpha=.8)
+            # ax.plot(0.75, 0.25, 'o', color='#1f77b4', markersize = 10, alpha=.8)
             
-            fprs, tprs, thre = map(list, zip(*pair))
-            if convex:
-                new_pairs = [tuple(x) for x in zip(fprs, tprs)]
-                self.convex_hill(ax, model=model, pairs=new_pairs)
-
-            # display roc line
-            fprs, tprs, thre = map(list, zip(*pair))
-            fprs = np.array(fprs)
-            tprs = np.array(tprs)
-            aucroc = metrics.auc(fprs, tprs)
-            str_auroc = str(round(aucroc, 2))
-            # for fpr, tpr in zip(fprs, tprs):
-            #     print(fpr, tpr) 
-            #     print(metrics.auc([0.0,fpr,1.0], [0.0,tpr,1.0]))
-            if roc_line:
-                ax.plot(fprs, tprs, label = model, color=models_color[model], linestyle='--')
-                
-            # notify the ROC point which is currently displayed in cost curve
-            if init_pair[i] != None:     
-                # display optimal roc points
-                init_fpr = [init_pair[i][0]]
-                init_tpr = [init_pair[i][1]]
-                aucroc = metrics.auc([0.0,init_pair[i][0],1.0], [0.0,init_pair[i][1],1.0])
-                str_auroc = str(round(aucroc, 2))
-                label_pair = inital_pair_label(model, decimal_pair(init_pair[i]))
-                # ax.plot(init_fpr, init_tpr, 'o', color=models_color[model], markersize = 10, label=label_pair+'(AUROC:'+str_auroc+")")
         
-        # display trivial line
-        self.trivial(ax, roc_trivial)
+        pc = []
+        for i in np.arange(0, 1.01, 0.01):
+            pc.append(i)
 
-        # plot parameters
-        build_plot(x_lim=[0.0, 1.0], y_lim=[0.0, 1.0], x_label="False positive Rate", y_label="True Positive Rate", title="ROC Curve")
-    
-    def trivial(selff, ax, roc_trivial):
-        '''
-        Draw trivial classifiers
-        
-        Args:
-            ax (subplot)
-            trivial (boolean): true - draw trivial classifier, false - not draw trivial classifier
-        '''
-        if roc_trivial:
-            ax.plot([0, 1], [0, 1], color='yellow', label = 'Trivial Classifier', linewidth=3)
-    
-    def convex_hill(self, ax, model, pairs):
-        """
-        Draw convex hill
-
-        Args:
-            ax (subplot)
-            convex (bool, optional): true - draw convex hill, false - not draw convex hill.
-            pairs (list): list of the pair data
-        """
-        points = np.array(pairs)
-        fprs, tprs = map(list, zip(*pairs))
-        # aucroc = metrics.auc(fprs, tprs)
-        # str_auroc = str(round(aucroc, 2))
-        hull = ConvexHull(points)
-        count = 0
-        for simplex in hull.simplices:
-            if count == 0:
-                ax.plot(points[simplex,0], points[simplex,1], color=models_color[model], linewidth=2.5, 
-                        label=model+" -- convex hull")
-            ax.plot(points[simplex,0], points[simplex,1], color=models_color[model], linewidth=2.5)
-            count += 1
+        fprs = [0, 1]
+        tprs = [0, 1]
+        lower_envelope_list = []
+        # compute the lower envelope
+        # for fpr, tpr in zip(fprs, tprs):
+            # lower_envelope_list = []
+        for x_value in pc:
+            y_value = min([((1-tpr)*(x_value*neg_misclass) + fpr*(1-x_value)*pos_misclass)  for fpr, tpr in zip(fprs, tprs)]) 
+                # y_value = (1-tpr)*(x_value*neg_misclass) + fpr*(1-x_value)*pos_misclass
+            lower_envelope_list.append(round(y_value, 12))
+        self.y_max = max(lower_envelope_list)
+        max_model_cost = max(self.model_costs[model[0]] for model in self.models)
+        value, y_ = self.optimal_classifier()
+        build_plot([0.0, 1.0], [0.0, self.y_max], "P(+)", "Expected Cost", "Cost Curve")
+        return value, y_
