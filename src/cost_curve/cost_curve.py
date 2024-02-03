@@ -719,7 +719,7 @@ class roc_curve:
                 ax.plot(fprs, tprs, label = model, color=models_color[model], linestyle='--')
 
             # notify the ROC point which is currently displayed in cost curve
-            if init_pair[i] != None:
+            if init_pair[i] is not None:
                 # display optimal roc points
                 init_fpr = [init_pair[i][0]]
                 init_tpr = [init_pair[i][1]]
